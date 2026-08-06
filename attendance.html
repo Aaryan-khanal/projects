@@ -1,0 +1,690 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Nirikshan — Face Attendance Terminal</title>
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+<div class="topbar">
+  <div class="brand">
+    <div class="brand-mark" id="brandMark"></div>
+    <div>
+      <div class="brand-title">NIRIKSHAN</div>
+      <div class="brand-sub">face-recognition attendance terminal</div>
+    </div>
+  </div>
+  <div class="status-cluster">
+    <div>MODELS: <b id="modelStatus">loading…</b></div>
+    <div>ROSTER: <b id="rosterCount">0</b></div>
+    <div>PRESENT: <b id="presentCount">0</b></div>
+    <div id="clock">00:00:00</div>
+    <a class="nav-link" href="admin-panel.html">Admin Panel</a>
+  </div>
+</div>
+
+<div class="layout">
+
+  <!-- LEFT: CAMERA -->
+  <div class="panel">
+    <div class="panel-label">Live Feed</div>
+    <div class="cam-wrap">
+      <video id="video" autoplay muted playsinline></video>
+      <canvas id="overlay"></canvas>
+      <div class="cam-frame">
+        <div class="corner tl"></div><div class="corner tr"></div>
+        <div class="corner bl"></div><div class="corner br"></div>
+        <div class="scanline" id="scanline" style="display:none;"></div>
+      </div>
+      <div class="cam-placeholder" id="camPlaceholder">
+        ▢ NO SIGNAL<br>click "start camera" to begin
+      </div>
+    </div>
+    <div class="cam-controls">
+      <button class="primary" id="startCamBtn">Start Camera</button>
+      <button id="stopCamBtn" disabled>Stop Camera</button>
+    </div>
+
+    <div class="section-gap">
+      <div class="mode-toggle">
+        <button id="modeRegister" class="active">Register Student</button>
+        <button id="modeRecognize">Take Attendance</button>
+      </div>
+
+      <!-- Register mode -->
+      <div id="registerPane">
+        <div class="field">
+          <label>STUDENT NAME</label>
+          <input type="text" id="nameInput" placeholder="e.g. Sujata Karki" />
+        </div>
+        <div class="field">
+          <label>STUDENT ID</label>
+          <input type="text" id="studentIdInput" placeholder="e.g. STU001" />
+        </div>
+        <div class="sample-dots" id="sampleDots">
+          <span></span><span></span><span></span>
+        </div>
+        <img id="photoPreview" alt="Student preview" style="display:none; width:100px; height:100px; object-fit:cover; border:1px solid var(--line); margin-top:8px; background:#000;" />
+        <button class="primary" id="captureBtn" disabled>Capture Sample</button>
+        <div class="id-card" id="registerCard">
+          <div class="id-name" id="registerCardName"></div>
+          <div class="id-meta" id="registerCardMeta"></div>
+        </div>
+      </div>
+
+      <!-- Recognize mode -->
+      <div id="recognizePane" style="display:none;">
+        <button class="primary" id="scanToggleBtn" disabled>Start Scanning</button>
+        <div class="id-card" id="recognizeCard">
+          <div class="id-name" id="recognizeCardName"></div>
+          <div class="id-meta" id="recognizeCardMeta"></div>
+        </div>
+        <div class="toast-log" id="scanLog"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- RIGHT: DATA -->
+  <div class="panel">
+    <div class="panel-label">Session Overview</div>
+    <div class="stat-row">
+      <div class="stat"><div class="num" id="statRoster">0</div><div class="lbl">Registered</div></div>
+      <div class="stat"><div class="num" id="statPresent">0</div><div class="lbl">Present</div></div>
+      <div class="stat"><div class="num" id="statPct">0%</div><div class="lbl">Attendance</div></div>
+    </div>
+
+    <div class="panel-label">Roster</div>
+    <div class="list" id="rosterList">
+      <div class="empty-row">no students registered yet</div>
+    </div>
+
+    <div class="panel-label section-gap">Attendance Log</div>
+    <div class="list" id="attendanceList">
+      <div class="empty-row">no attendance recorded yet</div>
+    </div>
+
+    <div class="footer-actions">
+      <button id="exportBtn">Export CSV</button>
+      <button class="danger" id="resetBtn">Reset Session</button>
+    </div>
+  </div>
+
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
+<script>
+const MODEL_URL = 'https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@master/weights';
+
+// ---------- state ----------
+let labeledStudents = [];   
+let attendanceLog = [];    
+let presentIds = new Set();
+let pendingSamples = [];    
+let stream = null;
+let scanning = false;
+let scanTimer = null;
+let modelsReady = false;
+const STORAGE_KEY = 'sentryAttendanceState';
+const DB_NAME = 'sentryAppDb';
+const DB_VERSION = 1;
+const DB_STORE = 'appState';
+let dbPromise = null;
+
+const MATCH_THRESHOLD = 0.55;
+const SAMPLES_NEEDED = 1;
+
+// ---------- dom ----------
+const video = document.getElementById('video');
+const overlay = document.getElementById('overlay');
+const camPlaceholder = document.getElementById('camPlaceholder');
+const scanline = document.getElementById('scanline');
+const startCamBtn = document.getElementById('startCamBtn');
+const stopCamBtn = document.getElementById('stopCamBtn');
+const captureBtn = document.getElementById('captureBtn');
+const scanToggleBtn = document.getElementById('scanToggleBtn');
+const nameInput = document.getElementById('nameInput');
+const studentIdInput = document.getElementById('studentIdInput');
+const sampleDots = document.querySelectorAll('#sampleDots span');
+const photoPreview = document.getElementById('photoPreview');
+const modeRegisterBtn = document.getElementById('modeRegister');
+const modeRecognizeBtn = document.getElementById('modeRecognize');
+const registerPane = document.getElementById('registerPane');
+const recognizePane = document.getElementById('recognizePane');
+const registerCard = document.getElementById('registerCard');
+const recognizeCard = document.getElementById('recognizeCard');
+const scanLog = document.getElementById('scanLog');
+const modelStatus = document.getElementById('modelStatus');
+const brandMark = document.getElementById('brandMark');
+const rosterCountEl = document.getElementById('rosterCount');
+const presentCountEl = document.getElementById('presentCount');
+const rosterList = document.getElementById('rosterList');
+const attendanceList = document.getElementById('attendanceList');
+const statRoster = document.getElementById('statRoster');
+const statPresent = document.getElementById('statPresent');
+const statPct = document.getElementById('statPct');
+const exportBtn = document.getElementById('exportBtn');
+const resetBtn = document.getElementById('resetBtn');
+
+
+function openDb(){
+  if (dbPromise) return dbPromise;
+  dbPromise = new Promise((resolve, reject) => {
+    const request = indexedDB.open(DB_NAME, DB_VERSION);
+    request.onupgradeneeded = (event) => {
+      const db = event.target.result;
+      if (!db.objectStoreNames.contains(DB_STORE)) {
+        db.createObjectStore(DB_STORE, { keyPath: 'id' });
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+  return dbPromise;
+}
+
+async function saveSessionState(){
+  const payload = {
+    labeledStudents: labeledStudents.map(s => ({
+      ...s,
+      descriptor: Array.from(s.descriptor || []),
+      referenceDescriptor: s.referenceDescriptor ? Array.from(s.referenceDescriptor) : null,
+      photoDataUrl: s.photoDataUrl || ''
+    })),
+    attendanceLog,
+    presentIds: Array.from(presentIds)
+  };
+
+  try {
+    const db = await openDb();
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction(DB_STORE, 'readwrite');
+      tx.objectStore(DB_STORE).put({ id: 'current', ...payload });
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  } catch (err) {
+    console.warn('Could not save state to database:', err);
+  }
+
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+}
+
+async function loadSessionState(){
+  try {
+    const db = await openDb();
+    const state = await new Promise((resolve) => {
+      const tx = db.transaction(DB_STORE, 'readonly');
+      const request = tx.objectStore(DB_STORE).get('current');
+      request.onsuccess = () => resolve(request.result || null);
+      request.onerror = () => resolve(null);
+    });
+
+    if (state) {
+      labeledStudents = (state.labeledStudents || []).map(s => ({
+        ...s,
+        descriptor: new Float32Array(s.descriptor || []),
+        referenceDescriptor: s.referenceDescriptor ? new Float32Array(s.referenceDescriptor) : null,
+        photoDataUrl: s.photoDataUrl || ''
+      }));
+      attendanceLog = state.attendanceLog || [];
+      presentIds = new Set(state.presentIds || []);
+      return;
+    }
+  } catch (err) {
+    console.warn('Could not restore attendance state from database:', err);
+  }
+
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return;
+    const data = JSON.parse(raw);
+    if (Array.isArray(data.labeledStudents)) {
+      labeledStudents = data.labeledStudents.map(s => ({
+        ...s,
+        descriptor: new Float32Array(s.descriptor || []),
+        referenceDescriptor: s.referenceDescriptor ? new Float32Array(s.referenceDescriptor) : null,
+        photoDataUrl: s.photoDataUrl || ''
+      }));
+    }
+    if (Array.isArray(data.attendanceLog)) attendanceLog = data.attendanceLog;
+    if (Array.isArray(data.presentIds)) presentIds = new Set(data.presentIds);
+  } catch (err) {
+    console.warn('Could not restore attendance state from local storage:', err);
+  }
+}
+
+
+function tickClock(){
+  document.getElementById('clock').textContent = new Date().toLocaleTimeString('en-GB');
+}
+setInterval(tickClock, 1000); tickClock();
+
+
+
+async function loadModels(){
+  try {
+    await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
+    await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL);
+    await faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL);
+    modelsReady = true;
+    modelStatus.textContent = 'ready';
+    brandMark.classList.add('online');
+  } catch(err){
+    modelStatus.textContent = 'failed to load';
+    console.error(err);
+    scanLog.innerHTML = `<b>Error:</b> could not load face-api models. Check your internet connection and reload.`;
+  }
+}
+loadModels();
+
+async function startCameraAutomatically(){
+  if (stream) return;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 }, audio: false });
+    video.srcObject = stream;
+    camPlaceholder.style.display = 'none';
+    startCamBtn.disabled = true;
+    stopCamBtn.disabled = false;
+    captureBtn.disabled = false;
+    scanToggleBtn.disabled = false;
+
+    if (labeledStudents.length > 0) {
+      setTimeout(() => {
+        if (!scanning && modelsReady) {
+          startScanning();
+        }
+      }, 300);
+    }
+  } catch(err){
+    camPlaceholder.style.display = 'flex';
+    camPlaceholder.textContent = 'Camera access denied or unavailable. Allow camera permission and try again.';
+    console.error(err);
+  }
+}
+
+// ---------- camera ----------
+startCamBtn.addEventListener('click', () => { void startCameraAutomatically(); });
+
+stopCamBtn.addEventListener('click', () => {
+  if (stream) stream.getTracks().forEach(t => t.stop());
+  video.srcObject = null;
+  camPlaceholder.style.display = 'flex';
+  camPlaceholder.textContent = '▢ NO SIGNAL — click "start camera" to begin';
+  startCamBtn.disabled = false;
+  stopCamBtn.disabled = true;
+  captureBtn.disabled = true;
+  scanToggleBtn.disabled = true;
+  stopScanning();
+});
+
+
+modeRegisterBtn.addEventListener('click', () => setMode('register'));
+modeRecognizeBtn.addEventListener('click', () => setMode('recognize'));
+function setMode(mode){
+  const isRegister = mode === 'register';
+  modeRegisterBtn.classList.toggle('active', isRegister);
+  modeRecognizeBtn.classList.toggle('active', !isRegister);
+  registerPane.style.display = isRegister ? 'block' : 'none';
+  recognizePane.style.display = isRegister ? 'none' : 'block';
+  if (isRegister) stopScanning();
+}
+
+// ---------- registration ----------
+captureBtn.addEventListener('click', async () => {
+  const name = nameInput.value.trim();
+  const studentId = studentIdInput.value.trim();
+  if (!name){ nameInput.focus(); return; }
+  if (!studentId){ studentIdInput.focus(); return; }
+  if (!modelsReady){ return; }
+
+  if (video.readyState < 2 || !video.videoWidth || !video.videoHeight) {
+    flashCard(registerCard, registerCard.querySelector('.id-name'), registerCard.querySelector('.id-meta'),
+      'Camera is still warming up', 'Wait a moment and try again.', true);
+    return;
+  }
+
+  const photoDataUrl = capturePhotoFromVideo();
+  if (!photoDataUrl) {
+    flashCard(registerCard, registerCard.querySelector('.id-name'), registerCard.querySelector('.id-meta'),
+      'No photo captured', 'Try again with the camera active.', true);
+    return;
+  }
+
+  let detection = null;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    detection = await faceapi.detectSingleFace(video, new faceapi.TinyFaceDetectorOptions())
+      .withFaceLandmarks().withFaceDescriptor();
+    if (detection) break;
+    await new Promise(resolve => setTimeout(resolve, 400));
+  }
+
+  if (!detection){
+    flashCard(registerCard, registerCard.querySelector('.id-name'), registerCard.querySelector('.id-meta'),
+      'No face detected', 'Center your face in frame and try again.', true);
+    return;
+  }
+
+  pendingSamples.push(detection.descriptor);
+  updateSampleDots();
+
+  if (pendingSamples.length >= SAMPLES_NEEDED){
+    const id = studentId || 'STU-' + Math.random().toString(36).slice(2,7).toUpperCase();
+    const referenceDescriptor = await getDescriptorFromImageDataUrl(photoDataUrl);
+    const savedDescriptor = referenceDescriptor || detection.descriptor || null;
+    labeledStudents.push({ id, name, descriptor: savedDescriptor, registeredAt: new Date(), photoDataUrl, referenceDescriptor, studentId: id });
+    pendingSamples = [];
+    updateSampleDots();
+    nameInput.value = '';
+    studentIdInput.value = '';
+    if (photoPreview) {
+      photoPreview.src = photoDataUrl || '';
+      photoPreview.style.display = photoDataUrl ? 'block' : 'none';
+    }
+    await saveStudentPhoto(photoDataUrl, id);
+    await saveSessionState();
+    renderRoster();
+    flashCard(registerCard, registerCard.querySelector('.id-name'), registerCard.querySelector('.id-meta'),
+      name, `Registered · ID ${id} · photo saved`, false);
+    if (stream) {
+      setTimeout(() => {
+        if (!scanning && modelsReady) {
+          startScanning();
+        }
+      }, 500);
+    }
+  } else {
+    flashCard(registerCard, registerCard.querySelector('.id-name'), registerCard.querySelector('.id-meta'),
+      `Sample ${pendingSamples.length}/${SAMPLES_NEEDED} captured`, 'Move slightly and capture again for accuracy.', false);
+  }
+});
+
+nameInput.addEventListener('input', () => { pendingSamples = []; updateSampleDots(); });
+
+function updateSampleDots(){
+  sampleDots.forEach((dot, i) => dot.classList.toggle('filled', i < pendingSamples.length));
+}
+
+function capturePhotoFromVideo(){
+  const canvas = document.createElement('canvas');
+  canvas.width = video.videoWidth || 640;
+  canvas.height = video.videoHeight || 480;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return '';
+  ctx.save();
+  ctx.translate(canvas.width, 0);
+  ctx.scale(-1, 1);
+  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+  ctx.restore();
+  return canvas.toDataURL('image/png');
+}
+
+async function saveStudentPhoto(dataUrl, studentId){
+  if (!dataUrl) return;
+
+  try {
+    const response = await fetch(dataUrl);
+    const blob = await response.blob();
+    const fileName = `studentpic-${studentId}.png`;
+    const file = new File([blob], fileName, { type: blob.type || 'image/png' });
+
+    if (window.showDirectoryPicker) {
+      const dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
+      const studentPicDir = await dirHandle.getDirectoryHandle('studentpic', { create: true });
+      const fileHandle = await studentPicDir.getFileHandle(fileName, { create: true });
+      const writable = await fileHandle.createWritable();
+      await writable.write(file);
+      await writable.close();
+      return;
+    }
+  } catch (err) {
+    console.warn('Could not save photo directly to folder:', err);
+  }
+
+  const link = document.createElement('a');
+  link.href = dataUrl;
+  link.download = `studentpic-${studentId}.png`;
+  link.click();
+}
+
+async function getDescriptorFromImageDataUrl(dataUrl){
+  if (!dataUrl) return null;
+  try {
+    const img = await faceapi.fetchImage(dataUrl);
+    let detection = null;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      detection = await faceapi.detectSingleFace(img, new faceapi.TinyFaceDetectorOptions())
+        .withFaceLandmarks().withFaceDescriptor();
+      if (detection) break;
+      await new Promise(resolve => setTimeout(resolve, 300));
+    }
+    return detection?.descriptor || null;
+  } catch (err) {
+    console.warn('Could not build descriptor from stored image:', err);
+    return null;
+  }
+}
+
+function averageDescriptors(list){
+  const len = list[0].length;
+  const out = new Float32Array(len);
+  for (const d of list) for (let i = 0; i < len; i++) out[i] += d[i];
+  for (let i = 0; i < len; i++) out[i] /= list.length;
+  return out;
+}
+
+function flashCard(cardEl, nameEl, metaEl, name, meta, isUnknown){
+  cardEl.classList.toggle('unknown', !!isUnknown);
+  nameEl.textContent = name;
+  metaEl.textContent = meta;
+  cardEl.classList.remove('show');
+  void cardEl.offsetWidth;
+  cardEl.classList.add('show');
+}
+
+// ---------- recognition ----------
+scanToggleBtn.addEventListener('click', () => {
+  scanning ? stopScanning() : startScanning();
+});
+
+window.addEventListener('load', () => {
+  setTimeout(() => {
+    if (modelsReady && labeledStudents.length > 0) {
+      void startCameraAutomatically();
+    }
+  }, 1000);
+});
+
+function startScanning(){
+  if (!modelsReady) return;
+  if (labeledStudents.length === 0){
+    scanLog.innerHTML = `<b>Note:</b> no students registered yet. Switch to "Register Student" first.`;
+    return;
+  }
+  if (scanning) return;
+  scanning = true;
+  scanToggleBtn.textContent = 'Stop Scanning';
+  scanline.style.display = 'block';
+  clearInterval(scanTimer);
+  scanLog.textContent = 'Scanning for faces…';
+  runRecognitionTick();
+  scanTimer = setInterval(runRecognitionTick, 900);
+}
+
+function stopScanning(){
+  scanning = false;
+  scanToggleBtn.textContent = 'Start Scanning';
+  scanline.style.display = 'none';
+  clearInterval(scanTimer);
+  scanTimer = null;
+  clearOverlay();
+}
+
+async function runRecognitionTick(){
+  if (!modelsReady || video.readyState !== 4) return;
+
+  const detections = await faceapi.detectAllFaces(video, new faceapi.TinyFaceDetectorOptions())
+    .withFaceLandmarks().withFaceDescriptors();
+
+  drawOverlay(detections);
+
+  if (detections.length === 0){
+    scanLog.textContent = 'Scanning for faces…';
+    return;
+  }
+
+  for (const det of detections){
+    const { match, distance } = await findBestMatch(det.descriptor);
+    if (match){
+      scanLog.innerHTML = `Matched <b>${match.name}</b> · distance ${distance.toFixed(3)}`;
+      if (!presentIds.has(match.id)){
+        presentIds.add(match.id);
+        const time = new Date().toLocaleTimeString('en-GB');
+        attendanceLog.unshift({ id: match.id, name: match.name, time });
+        saveStudentAttendanceRecord(match.id, match.name);
+        saveSessionState();
+        renderAttendance();
+        renderRoster();
+        flashCard(recognizeCard, recognizeCard.querySelector('.id-name'), recognizeCard.querySelector('.id-meta'),
+          match.name, `Marked present · ${time}`, false);
+      }
+    } else {
+      scanLog.innerHTML = `Face detected · no match (closest distance ${distance === Infinity ? '—' : distance.toFixed(3)})`;
+      flashCard(recognizeCard, recognizeCard.querySelector('.id-name'), recognizeCard.querySelector('.id-meta'),
+        'Unrecognized face', 'This person is not in the roster.', true);
+    }
+  }
+}
+
+async function findBestMatch(descriptor){
+  let best = null, bestDist = Infinity;
+  for (const s of labeledStudents){
+    const storedDescriptor = s.referenceDescriptor || s.descriptor;
+    if (!storedDescriptor) continue;
+    const d = faceapi.euclideanDistance(descriptor, storedDescriptor);
+    if (d < bestDist){ bestDist = d; best = s; }
+  }
+  return bestDist < MATCH_THRESHOLD ? { match: best, distance: bestDist } : { match: null, distance: bestDist };
+}
+
+function drawOverlay(detections){
+  const w = video.clientWidth, h = video.clientHeight;
+  overlay.width = w; overlay.height = h;
+  const ctx = overlay.getContext('2d');
+  ctx.clearRect(0,0,w,h);
+  const resized = faceapi.resizeResults(detections, { width: w, height: h });
+  resized.forEach(det => {
+    const box = det.detection.box;
+    // mirror because video is mirrored
+    const x = w - box.x - box.width;
+    ctx.strokeStyle = '#ffb000';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(x, box.y, box.width, box.height);
+  });
+}
+
+function clearOverlay(){
+  const ctx = overlay.getContext('2d');
+  ctx.clearRect(0,0,overlay.width, overlay.height);
+}
+
+// ---------- rendering ----------
+function renderRoster(){
+  rosterCountEl.textContent = labeledStudents.length;
+  statRoster.textContent = labeledStudents.length;
+  updateStats();
+  if (labeledStudents.length === 0){
+    rosterList.innerHTML = `<div class="empty-row">no students registered yet</div>`;
+    return;
+  }
+  rosterList.innerHTML = labeledStudents.map(s => `
+    <div class="list-row">
+      <div style="display:flex; align-items:center; gap:10px;">
+        ${s.photoDataUrl ? `<img src="${s.photoDataUrl}" alt="${escapeHtml(s.name)}" style="width:44px;height:44px;object-fit:cover;border:1px solid var(--line);background:#000;" />` : '<div style="width:44px;height:44px;border:1px solid var(--line);display:flex;align-items:center;justify-content:center;color:var(--text-dim);font-size:10px;">NO PIC</div>'}
+        <div>
+          <div class="who">${escapeHtml(s.name)}</div>
+          <div class="id-tag">${s.id}</div>
+        </div>
+      </div>
+      <div class="${presentIds.has(s.id) ? 'time' : 'id-tag'}">${presentIds.has(s.id) ? 'PRESENT' : 'absent'}</div>
+    </div>
+  `).join('');
+}
+
+function saveStudentAttendanceRecord(studentId, studentName){
+  const key = 'sentryStudentAttendance';
+  const records = JSON.parse(localStorage.getItem(key) || '[]');
+  const today = new Date().toISOString().slice(0, 10);
+  const existing = records.find(entry => entry.studentId === studentId && (entry.date || entry.createdAt || '').slice(0, 10) === today);
+  if (!existing) {
+    records.push({ studentId, studentName, present: true, date: new Date().toISOString(), createdAt: new Date().toISOString() });
+    localStorage.setItem(key, JSON.stringify(records));
+  }
+}
+
+function renderAttendance(){
+  presentCountEl.textContent = presentIds.size;
+  statPresent.textContent = presentIds.size;
+  updateStats();
+  if (attendanceLog.length === 0){
+    attendanceList.innerHTML = `<div class="empty-row">no attendance recorded yet</div>`;
+    return;
+  }
+  attendanceList.innerHTML = attendanceLog.map(a => `
+    <div class="list-row">
+      <div>
+        <div class="who">${escapeHtml(a.name)}</div>
+        <div class="id-tag">${a.id}</div>
+      </div>
+      <div class="time">${a.time}</div>
+    </div>
+  `).join('');
+}
+
+function updateStats(){
+  const pct = labeledStudents.length ? Math.round((presentIds.size / labeledStudents.length) * 100) : 0;
+  statPct.textContent = pct + '%';
+}
+
+function escapeHtml(str){
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+// ---------- export / reset ----------
+exportBtn.addEventListener('click', () => {
+  const rows = [['Name','ID','Time']].concat(attendanceLog.map(a => [a.name, a.id, a.time]));
+  const csv = rows.map(r => r.map(v => `"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = `attendance-${new Date().toISOString().slice(0,10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+});
+
+resetBtn.addEventListener('click', () => {
+  if (!confirm('Reset roster and attendance log for this session?')) return;
+  labeledStudents = [];
+  attendanceLog = [];
+  presentIds = new Set();
+  pendingSamples = [];
+  localStorage.removeItem(STORAGE_KEY);
+  updateSampleDots();
+  renderRoster();
+  renderAttendance();
+  scanLog.textContent = '';
+});
+
+// init
+(async function init(){
+  await loadSessionState();
+  renderRoster();
+  renderAttendance();
+  setMode('register');
+})();
+</script>
+</body>
+</html>

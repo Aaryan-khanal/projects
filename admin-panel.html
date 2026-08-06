@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Nirikshan — Admin Panel</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="shell">
+    <div class="topbar">
+      <div class="brand">
+        <div class="dot"></div>
+        <div>
+          <div class="title">NIRIKSHAN Admin</div>
+          <div class="subtitle">Attendance control center</div>
+        </div>
+      </div>
+      <div class="nav">
+        <a href="attendance.html" id="attendanceLink">Back to Terminal</a>
+        <a href="super-admin.html" id="superAdminLink">Super Admin</a>
+        <a href="student-login.html" id="studentPortalLink">Student Portal</a>
+        <a href="admin-login.html" id="logoutLink">Logout</a>
+      </div>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <h2>Session Overview</h2>
+        <div class="stats">
+          <div class="stat"><div class="value" id="totalStudents">0</div><div class="label">Registered</div></div>
+          <div class="stat"><div class="value" id="presentCount">0</div><div class="label">Present</div></div>
+          <div class="stat"><div class="value" id="attendanceRate">0%</div><div class="label">Attendance</div></div>
+        </div>
+        <div class="toolbar">
+          <input id="searchInput" type="text" placeholder="Search student name..." />
+          <select id="filterSelect">
+            <option value="all">All Students</option>
+            <option value="present">Present</option>
+            <option value="absent">Absent</option>
+          </select>
+          <button id="exportBtn">Export CSV</button>
+        </div>
+        <div class="list" id="studentList"><div class="empty">No roster data yet.</div></div>
+      </div>
+
+      <div class="card">
+        <h2>Attendance Log</h2>
+        <div class="list" id="attendanceList"><div class="empty">No attendance yet.</div></div>
+        <div class="controls">
+          <button id="refreshBtn">Refresh</button>
+          <button id="clearAttendanceBtn">Clear Attendance</button>
+          <button class="danger" id="clearBtn">Clear Session</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const STORAGE_KEY = 'sentryAttendanceState';
+    const AUTH_KEY = 'sentryAdminAuth';
+    const TEACHER_AUTH_KEY = 'sentryTeacherAuth';
+    const DB_NAME = 'sentryAppDb';
+    const DB_VERSION = 1;
+    const DB_STORE = 'appState';
+    let dbPromise = null;
+
+    const isAdmin = localStorage.getItem(AUTH_KEY) === 'true';
+    const isTeacher = localStorage.getItem(TEACHER_AUTH_KEY) === 'true';
+
+    if (!isAdmin && !isTeacher) {
+      window.location.href = 'admin-login.html';
+    }
+
+    if (isTeacher) {
+      document.getElementById('superAdminLink')?.remove();
+      document.getElementById('studentPortalLink')?.remove();
+      document.getElementById('attendanceLink')?.remove();
+    }
+
+    document.getElementById('logoutLink').addEventListener('click', () => {
+      localStorage.removeItem(AUTH_KEY);
+      localStorage.removeItem(TEACHER_AUTH_KEY);
+    });
+
+    const studentList = document.getElementById('studentList');
+    const attendanceList = document.getElementById('attendanceList');
+    const totalStudentsEl = document.getElementById('totalStudents');
+    const presentCountEl = document.getElementById('presentCount');
+    const attendanceRateEl = document.getElementById('attendanceRate');
+    const searchInput = document.getElementById('searchInput');
+    const filterSelect = document.getElementById('filterSelect');
+
+    function openDb(){
+      if (dbPromise) return dbPromise;
+      dbPromise = new Promise((resolve, reject) => {
+        const request = indexedDB.open(DB_NAME, DB_VERSION);
+        request.onupgradeneeded = (event) => {
+          const db = event.target.result;
+          if (!db.objectStoreNames.contains(DB_STORE)) {
+            db.createObjectStore(DB_STORE, { keyPath: 'id' });
+          }
+        };
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+      return dbPromise;
+    }
+
+    async function loadState() {
+      try {
+        const db = await openDb();
+        const state = await new Promise((resolve) => {
+          const tx = db.transaction(DB_STORE, 'readonly');
+          const request = tx.objectStore(DB_STORE).get('current');
+          request.onsuccess = () => resolve(request.result || null);
+          request.onerror = () => resolve(null);
+        });
+
+        if (state) {
+          return {
+            labeledStudents: Array.isArray(state.labeledStudents) ? state.labeledStudents : [],
+            attendanceLog: Array.isArray(state.attendanceLog) ? state.attendanceLog : [],
+            presentIds: Array.isArray(state.presentIds) ? state.presentIds : []
+          };
+        }
+      } catch (err) {
+        console.warn('Could not load admin state from database:', err);
+      }
+
+      try {
+        const raw = localStorage.getItem(STORAGE_KEY);
+        if (!raw) return { labeledStudents: [], attendanceLog: [], presentIds: [] };
+        const data = JSON.parse(raw);
+        return {
+          labeledStudents: Array.isArray(data.labeledStudents) ? data.labeledStudents : [],
+          attendanceLog: Array.isArray(data.attendanceLog) ? data.attendanceLog : [],
+          presentIds: Array.isArray(data.presentIds) ? data.presentIds : []
+        };
+      } catch (err) {
+        console.warn('Could not load admin state:', err);
+        return { labeledStudents: [], attendanceLog: [], presentIds: [] };
+      }
+    }
+
+    async function saveState(state) {
+      const payload = {
+        labeledStudents: state.labeledStudents,
+        attendanceLog: state.attendanceLog,
+        presentIds: state.presentIds
+      };
+
+      try {
+        const db = await openDb();
+        await new Promise((resolve, reject) => {
+          const tx = db.transaction(DB_STORE, 'readwrite');
+          tx.objectStore(DB_STORE).put({ id: 'current', ...payload });
+          tx.oncomplete = () => resolve();
+          tx.onerror = () => reject(tx.error);
+        });
+      } catch (err) {
+        console.warn('Could not save admin state to database:', err);
+      }
+
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+    }
+
+    function getFilteredStudents(state) {
+      const term = searchInput.value.trim().toLowerCase();
+      const filter = filterSelect.value;
+      return state.labeledStudents.filter(student => {
+        const matchesSearch = !term || student.name.toLowerCase().includes(term) || student.id.toLowerCase().includes(term);
+        const isPresent = state.presentIds.includes(student.id);
+        const matchesFilter = filter === 'all' || (filter === 'present' && isPresent) || (filter === 'absent' && !isPresent);
+        return matchesSearch && matchesFilter;
+      });
+    }
+
+    async function render() {
+      const state = await loadState();
+      const presentCount = state.presentIds.length;
+      const total = state.labeledStudents.length;
+      const rate = total ? Math.round((presentCount / total) * 100) : 0;
+      const filteredStudents = getFilteredStudents(state);
+
+      totalStudentsEl.textContent = total;
+      presentCountEl.textContent = presentCount;
+      attendanceRateEl.textContent = `${rate}%`;
+
+      if (filteredStudents.length === 0) {
+        studentList.innerHTML = '<div class="empty">No matching students.</div>';
+      } else {
+        studentList.innerHTML = filteredStudents.map(student => {
+          const isPresent = state.presentIds.includes(student.id);
+          return `
+            <div class="row">
+              <div class="student-main">
+                ${student.photoDataUrl ? `<img class="student-photo" src="${student.photoDataUrl}" alt="${escapeHtml(student.name)}" />` : '<div class="student-photo placeholder">No Pic</div>'}
+                <div>
+                  <div class="name">${escapeHtml(student.name)}</div>
+                  <div class="meta">${student.id}</div>
+                </div>
+              </div>
+              <div class="row-actions">
+                <div class="${isPresent ? 'pill' : 'pill warn'}">${isPresent ? 'Present' : 'Absent'}</div>
+                <button class="mini-btn" data-action="toggle-present" data-id="${escapeHtml(student.id)}">${isPresent ? 'Mark Absent' : 'Mark Present'}</button>
+                <button class="mini-btn danger" data-action="remove-student" data-id="${escapeHtml(student.id)}">Remove</button>
+              </div>
+            </div>
+          `;
+        }).join('');
+      }
+
+      if (state.attendanceLog.length === 0) {
+        attendanceList.innerHTML = '<div class="empty">No attendance yet.</div>';
+      } else {
+        attendanceList.innerHTML = state.attendanceLog.map(entry => `
+          <div class="row">
+            <div>
+              <div class="name">${escapeHtml(entry.name)}</div>
+              <div class="meta">${entry.id}</div>
+            </div>
+            <div class="pill">${entry.time}</div>
+          </div>
+        `).join('');
+      }
+    }
+
+    function escapeHtml(str) {
+      const div = document.createElement('div');
+      div.textContent = str;
+      return div.innerHTML;
+    }
+
+    studentList.addEventListener('click', async (event) => {
+      const button = event.target.closest('button[data-action]');
+      if (!button) return;
+      const state = await loadState();
+      const id = button.dataset.id;
+      if (button.dataset.action === 'toggle-present') {
+        if (state.presentIds.includes(id)) {
+          state.presentIds = state.presentIds.filter(item => item !== id);
+        } else {
+          state.presentIds.push(id);
+        }
+      }
+      if (button.dataset.action === 'remove-student') {
+        state.labeledStudents = state.labeledStudents.filter(student => student.id !== id);
+        state.presentIds = state.presentIds.filter(item => item !== id);
+        state.attendanceLog = state.attendanceLog.filter(entry => entry.id !== id);
+      }
+      await saveState(state);
+      await render();
+    });
+
+    document.getElementById('refreshBtn').addEventListener('click', () => { void render(); });
+    document.getElementById('clearAttendanceBtn').addEventListener('click', async () => {
+      const state = await loadState();
+      state.attendanceLog = [];
+      state.presentIds = [];
+      await saveState(state);
+      await render();
+    });
+    document.getElementById('clearBtn').addEventListener('click', async () => {
+      if (!confirm('Clear the current session data?')) return;
+      localStorage.removeItem(STORAGE_KEY);
+      try {
+        const db = await openDb();
+        await new Promise((resolve, reject) => {
+          const tx = db.transaction(DB_STORE, 'readwrite');
+          tx.objectStore(DB_STORE).delete('current');
+          tx.oncomplete = () => resolve();
+          tx.onerror = () => reject(tx.error);
+        });
+      } catch (err) {
+        console.warn('Could not clear database state:', err);
+      }
+      await render();
+    });
+    document.getElementById('exportBtn').addEventListener('click', async () => {
+      const state = await loadState();
+      const rows = [['Name', 'ID', 'Time']].concat(state.attendanceLog.map(entry => [entry.name, entry.id, entry.time]));
+      const csv = rows.map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n');
+      const blob = new Blob([csv], { type: 'text/csv' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = `admin-attendance-${new Date().toISOString().slice(0, 10)}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+    });
+    searchInput.addEventListener('input', () => { void render(); });
+    filterSelect.addEventListener('change', () => { void render(); });
+
+    void render();
+    window.addEventListener('storage', () => { void render(); });
+  </script>
+</body>
+</html>

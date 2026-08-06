@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Nirikshan — Student Portal</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="shell">
+    <div class="card">
+      <div class="brand">
+        <div class="dot"></div>
+        <div>
+          <div class="title">NIRIKSHAN Student</div>
+          <div class="subtitle">Attendance report portal</div>
+        </div>
+      </div>
+
+      <div id="loginView">
+        <div class="form">
+          <div class="field"><input id="studentIdInput" type="text" placeholder="Enter your student ID" /></div>
+          <div class="field"><input id="studentPasswordInput" type="password" placeholder="Enter your password" /></div>
+          <button id="loginBtn">Login</button>
+          <div class="hint" id="loginHint"></div>
+        </div>
+      </div>
+
+      <div id="reportView" style="display:none;">
+        <div class="grid">
+          <div class="panel">
+            <div class="stats">
+              <div class="stat"><div class="value" id="totalPresent">0</div><div class="label">Present Days</div></div>
+              <div class="stat"><div class="value" id="currentStreak">0</div><div class="label">Current Streak</div></div>
+            </div>
+            <div class="chart" id="chart"></div>
+            <div class="meta" id="studentMeta"></div>
+          </div>
+          <div class="panel">
+            <h3 style="margin-top:0; font-family:var(--display); letter-spacing:1px; text-transform:uppercase;">Attendance Summary</h3>
+            <div id="recentList" class="meta"></div>
+            <div style="margin-top:12px;"><button id="logoutBtn">Logout</button></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const STUDENT_AUTH_KEY = 'sentryStudentAuth';
+    const ACCOUNTS_KEY = 'sentrySuperAdminPeople';
+    const ATTENDANCE_KEY = 'sentryStudentAttendance';
+
+    const loginView = document.getElementById('loginView');
+    const reportView = document.getElementById('reportView');
+    const studentIdInput = document.getElementById('studentIdInput');
+    const studentPasswordInput = document.getElementById('studentPasswordInput');
+    const loginHint = document.getElementById('loginHint');
+    const chartEl = document.getElementById('chart');
+    const totalPresentEl = document.getElementById('totalPresent');
+    const currentStreakEl = document.getElementById('currentStreak');
+    const studentMetaEl = document.getElementById('studentMeta');
+    const recentListEl = document.getElementById('recentList');
+
+    function loadAccounts() {
+      try {
+        const raw = localStorage.getItem(ACCOUNTS_KEY);
+        if (!raw) return [];
+        return JSON.parse(raw).filter(item => item.role === 'student' && item.status === 'active');
+      } catch (err) {
+        return [];
+      }
+    }
+
+    function loadAttendance() {
+      try {
+        const raw = localStorage.getItem(ATTENDANCE_KEY);
+        if (!raw) return [];
+        return JSON.parse(raw);
+      } catch (err) {
+        return [];
+      }
+    }
+
+    function saveAttendance(records) {
+      localStorage.setItem(ATTENDANCE_KEY, JSON.stringify(records));
+    }
+
+    function authenticate(studentId, password) {
+      const accounts = loadAccounts();
+      return accounts.find(account => account.studentId === studentId && String(account.password) === String(password));
+    }
+
+    function renderReport(student) {
+      const records = loadAttendance().filter(entry => String(entry.studentId) === String(student.studentId));
+      const labels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+      const counts = Array(7).fill(0);
+
+      records.forEach(entry => {
+        const date = new Date(entry.date || entry.createdAt || new Date());
+        const index = (date.getDay() + 6) % 7;
+        counts[index] += 1;
+      });
+
+      const max = Math.max(1, ...counts);
+      chartEl.innerHTML = counts.map((value, index) => `
+        <div class="bar-wrap">
+          <div class="bar" style="height:${Math.max(18, (value / max) * 140)}px;"><span></span></div>
+          <div class="bar-label">${labels[index]}</div>
+        </div>
+      `).join('');
+
+      const totalPresent = records.length;
+      let streak = 0;
+      const today = new Date();
+      for (let offset = 0; offset < 30; offset += 1) {
+        const day = new Date(today);
+        day.setDate(today.getDate() - offset);
+        const dayKey = day.toISOString().slice(0, 10);
+        const hasRecord = records.some(entry => (entry.date || entry.createdAt || '').slice(0, 10) === dayKey);
+        if (hasRecord) streak += 1; else break;
+      }
+
+      totalPresentEl.textContent = totalPresent;
+      currentStreakEl.textContent = streak;
+      studentMetaEl.textContent = `${student.name} · ID ${student.studentId}`;
+
+      if (records.length === 0) {
+        recentListEl.innerHTML = '<div>No attendance records yet.</div>';
+      } else {
+        recentListEl.innerHTML = records.slice(0, 6).map(entry => `
+          <div style="margin-bottom:6px;">${escapeHtml(entry.date || entry.createdAt || 'Unknown')} · ${entry.present ? 'Present' : 'Absent'}</div>
+        `).join('');
+      }
+    }
+
+    function escapeHtml(str) {
+      const div = document.createElement('div');
+      div.textContent = str;
+      return div.innerHTML;
+    }
+
+    function showDashboard(student) {
+      loginView.style.display = 'none';
+      reportView.style.display = 'block';
+      renderReport(student);
+    }
+
+    document.getElementById('loginBtn').addEventListener('click', () => {
+      const studentId = studentIdInput.value.trim();
+      const password = studentPasswordInput.value;
+      const student = authenticate(studentId, password);
+      if (!student) {
+        loginHint.textContent = 'Invalid student ID or password.';
+        return;
+      }
+      localStorage.setItem(STUDENT_AUTH_KEY, student.studentId);
+      loginHint.textContent = '';
+      showDashboard(student);
+    });
+
+    document.getElementById('logoutBtn').addEventListener('click', () => {
+      localStorage.removeItem(STUDENT_AUTH_KEY);
+      reportView.style.display = 'none';
+      loginView.style.display = 'block';
+      studentIdInput.value = '';
+      studentPasswordInput.value = '';
+      loginHint.textContent = '';
+    });
+
+    const currentStudentId = localStorage.getItem(STUDENT_AUTH_KEY);
+    if (currentStudentId) {
+      const student = loadAccounts().find(user => user.studentId === currentStudentId);
+      if (student) {
+        showDashboard(student);
+      }
+    }
+
+    window.addEventListener('storage', () => {
+      const activeStudentId = localStorage.getItem(STUDENT_AUTH_KEY);
+      if (activeStudentId) {
+        const student = loadAccounts().find(user => user.studentId === activeStudentId);
+        if (student) {
+          showDashboard(student);
+        }
+      }
+    });
+
+    setInterval(() => {
+      const activeStudentId = localStorage.getItem(STUDENT_AUTH_KEY);
+      if (activeStudentId && reportView.style.display !== 'none') {
+        const student = loadAccounts().find(user => user.studentId === activeStudentId);
+        if (student) {
+          renderReport(student);
+        }
+      }
+    }, 3000);
+  </script>
+</body>
+</html>

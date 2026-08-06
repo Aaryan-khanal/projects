@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Nirikshan — Admin Login</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body class="login-page">
+  <div class="card">
+    <div class="brand">
+      <div class="dot"></div>
+      <div>
+        <div class="title">NIRIKSHAN Admin</div>
+        <div class="subtitle">Secure access</div>
+      </div>
+    </div>
+
+    <div class="switcher">
+      <button id="adminModeBtn" class="active" type="button">Admin</button>
+      <button id="superAdminModeBtn" type="button">Super Admin</button>
+    </div>
+    <div class="field">
+      <label for="username">Email</label>
+      <input id="username" type="text" placeholder="Enter email" />
+    </div>
+    <div class="field">
+      <label for="password">Password</label>
+      <input id="password" type="password" placeholder="Enter password" />
+    </div>
+    <button id="loginBtn">Login</button>
+    <div style="margin-top:10px; text-align:center;">
+      <a href="super-admin.html" style="color:var(--amber); font-family:var(--mono); font-size:11px; text-decoration:none;">Open Super Admin</a>
+      <br />
+      <a href="student-login.html" style="color:var(--amber); font-family:var(--mono); font-size:11px; text-decoration:none;">Open Student Portal</a>
+    </div>
+    <div class="error" id="errorMsg"></div>
+  </div>
+
+  <script>
+    const usernameInput = document.getElementById('username');
+    const passwordInput = document.getElementById('password');
+    const errorMsg = document.getElementById('errorMsg');
+    const adminModeBtn = document.getElementById('adminModeBtn');
+    const superAdminModeBtn = document.getElementById('superAdminModeBtn');
+    const PEOPLE_KEY = 'sentrySuperAdminPeople';
+    let mode = 'admin';
+
+    function loadPeople() {
+      try {
+        const raw = localStorage.getItem(PEOPLE_KEY);
+        if (!raw) return [];
+        return JSON.parse(raw);
+      } catch (err) {
+        return [];
+      }
+    }
+
+    function findTeacherAccount(email, password) {
+      return loadPeople().find(person =>
+        person.role === 'teacher' &&
+        person.status === 'active' &&
+        String(person.email).trim().toLowerCase() === String(email).trim().toLowerCase() &&
+        String(person.password) === String(password)
+      );
+    }
+
+    function setMode(nextMode) {
+      mode = nextMode;
+      adminModeBtn.classList.toggle('active', nextMode === 'admin');
+      superAdminModeBtn.classList.toggle('active', nextMode === 'super');
+      document.querySelector('.title').textContent = nextMode === 'super' ? 'NIRIKSHAN SUPER ADMIN' : 'NIRIKSHAN ADMIN';
+      document.querySelector('.subtitle').textContent = nextMode === 'super' ? 'Secure super access' : 'Secure access';
+    }
+
+    adminModeBtn.addEventListener('click', () => setMode('admin'));
+    superAdminModeBtn.addEventListener('click', () => setMode('super'));
+
+    document.getElementById('loginBtn').addEventListener('click', () => {
+      const email = usernameInput.value.trim().toLowerCase();
+      const password = passwordInput.value;
+
+      if (mode === 'super') {
+        if (email === 'superadmin' && password === 'superadmin') {
+          localStorage.setItem('sentryAdminAuth', 'true');
+          localStorage.setItem('sentrySuperAdminAuth', 'true');
+          window.location.href = 'super-admin.html';
+        } else {
+          errorMsg.textContent = 'Invalid super admin email or password';
+        }
+        return;
+      }
+
+      if (email === 'admin' && password === 'admin') {
+        localStorage.setItem('sentryAdminAuth', 'true');
+        localStorage.removeItem('sentryTeacherAuth');
+        localStorage.removeItem('sentrySuperAdminAuth');
+        window.location.href = 'admin.html';
+        return;
+      }
+
+      const teacherAccount = findTeacherAccount(email, password);
+      if (teacherAccount) {
+        localStorage.setItem('sentryAdminAuth', 'false');
+        localStorage.setItem('sentryTeacherAuth', 'true');
+        localStorage.removeItem('sentrySuperAdminAuth');
+        window.location.href = 'admin.html';
+        return;
+      }
+
+      errorMsg.textContent = 'Invalid admin or teacher email or password';
+    });
+
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        document.getElementById('loginBtn').click();
+      }
+    });
+  </script>
+</body>
+</html>

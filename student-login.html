@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Nirikshan — Student Login</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body class="login-page">
+  <div class="login-shell">
+    <div class="card student-login-card">
+      <div class="title">NIRIKSHAN Student</div>
+      <div class="subtitle">Personal attendance portal</div>
+      <div class="field"><input id="studentIdInput" type="text" placeholder="Student ID" /></div>
+      <div class="field"><input id="studentPasswordInput" type="password" placeholder="Password" /></div>
+      <button id="loginBtn">Open Report</button>
+      <div class="hint" id="hint"></div>
+    </div>
+  </div>
+  <script>
+    const ACCOUNTS_KEY = 'sentrySuperAdminPeople';
+    const STUDENT_AUTH_KEY = 'sentryStudentAuth';
+    function loadAccounts() {
+      try {
+        const raw = localStorage.getItem(ACCOUNTS_KEY);
+        if (!raw) return [];
+        return JSON.parse(raw).filter(item => item.role === 'student' && item.status === 'active');
+      } catch (err) { return []; }
+    }
+    document.getElementById('loginBtn').addEventListener('click', () => {
+      const id = document.getElementById('studentIdInput').value.trim();
+      const password = document.getElementById('studentPasswordInput').value;
+      const account = loadAccounts().find(item => item.studentId === id && String(item.password) === String(password));
+      if (!account) {
+        document.getElementById('hint').textContent = 'Invalid student ID or password.';
+        return;
+      }
+      localStorage.setItem(STUDENT_AUTH_KEY, id);
+      window.location.href = 'student-portal.html';
+    });
+  </script>
+</body>
+</html>

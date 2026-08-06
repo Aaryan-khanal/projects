@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Nirikshan — Super Admin</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="shell">
+    <div class="topbar">
+      <div class="brand">
+        <div class="dot"></div>
+        <div>
+          <div class="title">NIRIKSHAN Super Admin</div>
+          <div class="subtitle">Full control center</div>
+        </div>
+      </div>
+      <div class="nav">
+        <a href="admin.html">Admin Panel</a>
+        <a href="attendance.html">Attendance</a>
+        <a href="admin-login.html" id="logoutLink">Logout</a>
+      </div>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <h2>Register People</h2>
+        <div class="form">
+          <input id="personName" type="text" placeholder="Name" />
+          <input id="personEmail" type="text" placeholder="Email" />
+          <input id="studentIdInput" type="text" placeholder="ID" />
+          <input id="studentPasswordInput" type="password" placeholder="Password" />
+          <select id="personRole">
+            <option value="teacher">Teacher</option>
+            <option value="student">Student</option>
+          </select>
+          <div class="row-actions">
+            <button id="registerBtn">Register</button>
+            <button id="resetPeopleBtn">Reset All</button>
+          </div>
+        </div>
+        <div class="stats" style="margin-top:12px;">
+          <div class="stat"><div class="value" id="teacherCount">0</div><div class="label">Teachers</div></div>
+          <div class="stat"><div class="value" id="studentCount">0</div><div class="label">Students</div></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Managed Accounts</h2>
+        <div class="list" id="peopleList"><div class="empty">No users registered yet.</div></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const AUTH_KEY = 'sentryAdminAuth';
+    const SUPER_AUTH_KEY = 'sentrySuperAdminAuth';
+    const TEACHER_AUTH_KEY = 'sentryTeacherAuth';
+    const PEOPLE_KEY = 'sentrySuperAdminPeople';
+
+    if (localStorage.getItem(SUPER_AUTH_KEY) !== 'true') {
+      window.location.href = 'admin-login.html';
+    }
+
+    if (localStorage.getItem(TEACHER_AUTH_KEY) === 'true') {
+      window.location.href = 'admin.html';
+    }
+
+    document.getElementById('logoutLink').addEventListener('click', () => {
+      localStorage.removeItem(AUTH_KEY);
+      localStorage.removeItem(TEACHER_AUTH_KEY);
+      localStorage.removeItem(SUPER_AUTH_KEY);
+    });
+
+    const nameInput = document.getElementById('personName');
+    const emailInput = document.getElementById('personEmail');
+    const studentIdInput = document.getElementById('studentIdInput');
+    const studentPasswordInput = document.getElementById('studentPasswordInput');
+    const roleSelect = document.getElementById('personRole');
+    const peopleList = document.getElementById('peopleList');
+    const teacherCountEl = document.getElementById('teacherCount');
+    const studentCountEl = document.getElementById('studentCount');
+
+    function loadPeople() {
+      try {
+        const raw = localStorage.getItem(PEOPLE_KEY);
+        if (!raw) return [];
+        return JSON.parse(raw);
+      } catch (err) {
+        return [];
+      }
+    }
+
+    function savePeople(people) {
+      localStorage.setItem(PEOPLE_KEY, JSON.stringify(people));
+    }
+
+    function renderPeople() {
+      const people = loadPeople();
+      teacherCountEl.textContent = people.filter(p => p.role === 'teacher').length;
+      studentCountEl.textContent = people.filter(p => p.role === 'student').length;
+
+      if (people.length === 0) {
+        peopleList.innerHTML = '<div class="empty">No users registered yet.</div>';
+        return;
+      }
+
+      peopleList.innerHTML = people.map(person => `
+        <div class="item">
+          <div>
+            <div class="name">${escapeHtml(person.name)}</div>
+            <div class="meta">${escapeHtml(person.email)} · ${escapeHtml(person.role)}${person.role === 'student' && person.studentId ? ` · ID ${escapeHtml(person.studentId)}` : ''}</div>
+          </div>
+          <div class="row-actions">
+            <div class="pill ${person.role === 'teacher' ? '' : 'warn'}">${person.role === 'teacher' ? 'Teacher' : 'Student'}</div>
+            <button data-action="toggle" data-id="${person.id}">${person.status === 'active' ? 'Deactivate' : 'Activate'}</button>
+            <button class="danger" data-action="remove" data-id="${person.id}">Remove</button>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    function escapeHtml(str) {
+      const div = document.createElement('div');
+      div.textContent = str;
+      return div.innerHTML;
+    }
+
+    document.getElementById('registerBtn').addEventListener('click', () => {
+      const name = nameInput.value.trim();
+      const email = emailInput.value.trim();
+      const role = roleSelect.value;
+      const studentId = studentIdInput.value.trim();
+      const password = studentPasswordInput.value;
+      if (!name || !email || !password) return;
+      if (role === 'student' && !studentId) return;
+
+      const people = loadPeople();
+      people.push({
+        id: Date.now().toString(36),
+        name,
+        email,
+        role,
+        status: 'active',
+        studentId: role === 'student' ? studentId : '',
+        password
+      });
+      savePeople(people);
+      nameInput.value = '';
+      emailInput.value = '';
+      studentIdInput.value = '';
+      studentPasswordInput.value = '';
+      roleSelect.value = 'teacher';
+      renderPeople();
+    });
+
+    peopleList.addEventListener('click', (event) => {
+      const button = event.target.closest('button[data-action]');
+      if (!button) return;
+      const people = loadPeople();
+      const id = button.dataset.id;
+      if (button.dataset.action === 'toggle') {
+        const person = people.find(p => p.id === id);
+        if (person) person.status = person.status === 'active' ? 'inactive' : 'active';
+      }
+      if (button.dataset.action === 'remove') {
+        const filtered = people.filter(p => p.id !== id);
+        savePeople(filtered);
+        renderPeople();
+        return;
+      }
+      savePeople(people);
+      renderPeople();
+    });
+
+    document.getElementById('resetPeopleBtn').addEventListener('click', () => {
+      if (!confirm('Reset all registered teachers and students?')) return;
+      savePeople([]);
+      renderPeople();
+    });
+
+    renderPeople();
+  </script>
+</body>
+</html>
