@@ -57,6 +57,7 @@
   </div>
 
   <script>
+    const API_BASE = window.location.protocol === 'file:' ? 'http://localhost:3000' : window.location.origin;
     const STORAGE_KEY = 'sentryAttendanceState';
     const AUTH_KEY = 'sentryAdminAuth';
     const TEACHER_AUTH_KEY = 'sentryTeacherAuth';
@@ -65,22 +66,50 @@
     const DB_STORE = 'appState';
     let dbPromise = null;
 
-    const isAdmin = localStorage.getItem(AUTH_KEY) === 'true';
-    const isTeacher = localStorage.getItem(TEACHER_AUTH_KEY) === 'true';
-
-    if (!isAdmin && !isTeacher) {
-      window.location.href = 'admin-login.html';
+    async function requireAuth() {
+      const token = localStorage.getItem('sentryAuthToken');
+      if (!token) {
+        window.location.href = 'admin-login.html';
+        return;
+      }
+      try {
+        const response = await fetch(`${API_BASE}/api/auth/verify`, { headers: { Authorization: `Bearer ${token}` } });
+        const data = await response.json();
+        if (!response.ok || !data.user) {
+          window.location.href = 'admin-login.html';
+          return;
+        }
+        const role = data.user.role;
+        if (role !== 'admin' && role !== 'teacher' && role !== 'super_admin') {
+          window.location.href = 'admin-login.html';
+          return;
+        }
+        localStorage.setItem(AUTH_KEY, role === 'super_admin' || role === 'admin' ? 'true' : 'false');
+        localStorage.setItem(TEACHER_AUTH_KEY, role === 'teacher' ? 'true' : 'false');
+        const isTeacher = role === 'teacher';
+        if (isTeacher) {
+          document.getElementById('superAdminLink')?.remove();
+          document.getElementById('studentPortalLink')?.remove();
+          document.getElementById('attendanceLink')?.remove();
+        }
+      } catch (error) {
+        window.location.href = 'admin-login.html';
+      }
     }
 
-    if (isTeacher) {
-      document.getElementById('superAdminLink')?.remove();
-      document.getElementById('studentPortalLink')?.remove();
-      document.getElementById('attendanceLink')?.remove();
-    }
+    void requireAuth();
 
-    document.getElementById('logoutLink').addEventListener('click', () => {
+    document.getElementById('logoutLink').addEventListener('click', async () => {
+      const token = localStorage.getItem('sentryAuthToken');
+      if (token) {
+        await fetch(`${API_BASE}/api/auth/logout`, { method: 'POST', headers: { Authorization: `Bearer ${token}` } });
+      }
       localStorage.removeItem(AUTH_KEY);
       localStorage.removeItem(TEACHER_AUTH_KEY);
+      localStorage.removeItem('sentryAuthToken');
+      localStorage.removeItem('sentrySuperAdminAuth');
+      localStorage.removeItem('sentryUserRole');
+      localStorage.removeItem('sentryUserEmail');
     });
 
     const studentList = document.getElementById('studentList');

@@ -6,7 +6,7 @@
   <title>Nirikshan — Student Portal</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
-<body>
+<body class="portal-page">
   <div class="shell">
     <div class="card">
       <div class="brand">
@@ -27,6 +27,13 @@
       </div>
 
       <div id="reportView" style="display:none;">
+        <div class="profile-card">
+          <img id="studentAvatar" class="student-avatar" alt="Student Photo" style="display:none;" />
+          <div>
+            <div class="student-name" id="studentName"></div>
+            <div class="student-id" id="studentMeta"></div>
+          </div>
+        </div>
         <div class="grid">
           <div class="panel">
             <div class="stats">
@@ -34,7 +41,6 @@
               <div class="stat"><div class="value" id="currentStreak">0</div><div class="label">Current Streak</div></div>
             </div>
             <div class="chart" id="chart"></div>
-            <div class="meta" id="studentMeta"></div>
           </div>
           <div class="panel">
             <h3 style="margin-top:0; font-family:var(--display); letter-spacing:1px; text-transform:uppercase;">Attendance Summary</h3>
@@ -47,8 +53,8 @@
   </div>
 
   <script>
+    const API_BASE = window.location.protocol === 'file:' ? 'http://localhost:3000' : window.location.origin;
     const STUDENT_AUTH_KEY = 'sentryStudentAuth';
-    const ACCOUNTS_KEY = 'sentrySuperAdminPeople';
     const ATTENDANCE_KEY = 'sentryStudentAttendance';
 
     const loginView = document.getElementById('loginView');
@@ -60,17 +66,9 @@
     const totalPresentEl = document.getElementById('totalPresent');
     const currentStreakEl = document.getElementById('currentStreak');
     const studentMetaEl = document.getElementById('studentMeta');
+    const studentNameEl = document.getElementById('studentName');
+    const studentAvatarEl = document.getElementById('studentAvatar');
     const recentListEl = document.getElementById('recentList');
-
-    function loadAccounts() {
-      try {
-        const raw = localStorage.getItem(ACCOUNTS_KEY);
-        if (!raw) return [];
-        return JSON.parse(raw).filter(item => item.role === 'student' && item.status === 'active');
-      } catch (err) {
-        return [];
-      }
-    }
 
     function loadAttendance() {
       try {
@@ -82,13 +80,17 @@
       }
     }
 
-    function saveAttendance(records) {
-      localStorage.setItem(ATTENDANCE_KEY, JSON.stringify(records));
-    }
-
-    function authenticate(studentId, password) {
-      const accounts = loadAccounts();
-      return accounts.find(account => account.studentId === studentId && String(account.password) === String(password));
+    async function verifySession() {
+      const token = localStorage.getItem('sentryAuthToken');
+      if (!token) return null;
+      try {
+        const response = await fetch(`${API_BASE}/api/auth/verify`, { headers: { Authorization: `Bearer ${token}` } });
+        const data = await response.json();
+        if (!response.ok || !data.user) return null;
+        return data.user;
+      } catch (error) {
+        return null;
+      }
     }
 
     function renderReport(student) {
@@ -123,7 +125,14 @@
 
       totalPresentEl.textContent = totalPresent;
       currentStreakEl.textContent = streak;
-      studentMetaEl.textContent = `${student.name} · ID ${student.studentId}`;
+      studentNameEl.textContent = student.name;
+      studentMetaEl.textContent = `ID ${student.studentId}`;
+      if (student.photoDataUrl) {
+        studentAvatarEl.src = student.photoDataUrl;
+        studentAvatarEl.style.display = 'block';
+      } else {
+        studentAvatarEl.style.display = 'none';
+      }
 
       if (records.length === 0) {
         recentListEl.innerHTML = '<div>No attendance records yet.</div>';
@@ -146,21 +155,33 @@
       renderReport(student);
     }
 
-    document.getElementById('loginBtn').addEventListener('click', () => {
+    document.getElementById('loginBtn').addEventListener('click', async () => {
       const studentId = studentIdInput.value.trim();
       const password = studentPasswordInput.value;
-      const student = authenticate(studentId, password);
-      if (!student) {
-        loginHint.textContent = 'Invalid student ID or password.';
-        return;
+      try {
+        const response = await fetch(`${API_BASE}/api/auth/login`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ studentId, password, role: 'student' })
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || 'Invalid student ID or password.');
+        localStorage.setItem('sentryAuthToken', data.token);
+        localStorage.setItem(STUDENT_AUTH_KEY, studentId);
+        loginHint.textContent = '';
+        showDashboard(data.user);
+      } catch (error) {
+        loginHint.textContent = error.message || 'Invalid student ID or password.';
       }
-      localStorage.setItem(STUDENT_AUTH_KEY, student.studentId);
-      loginHint.textContent = '';
-      showDashboard(student);
     });
 
-    document.getElementById('logoutBtn').addEventListener('click', () => {
+    document.getElementById('logoutBtn').addEventListener('click', async () => {
+      const token = localStorage.getItem('sentryAuthToken');
+      if (token) {
+        await fetch(`${API_BASE}/api/auth/logout`, { method: 'POST', headers: { Authorization: `Bearer ${token}` } });
+      }
       localStorage.removeItem(STUDENT_AUTH_KEY);
+      localStorage.removeItem('sentryAuthToken');
       reportView.style.display = 'none';
       loginView.style.display = 'block';
       studentIdInput.value = '';
@@ -168,30 +189,19 @@
       loginHint.textContent = '';
     });
 
-    const currentStudentId = localStorage.getItem(STUDENT_AUTH_KEY);
-    if (currentStudentId) {
-      const student = loadAccounts().find(user => user.studentId === currentStudentId);
-      if (student) {
-        showDashboard(student);
+    (async function init() {
+      const currentUser = await verifySession();
+      if (currentUser && currentUser.role === 'student') {
+        showDashboard(currentUser);
       }
-    }
+    })();
 
-    window.addEventListener('storage', () => {
-      const activeStudentId = localStorage.getItem(STUDENT_AUTH_KEY);
-      if (activeStudentId) {
-        const student = loadAccounts().find(user => user.studentId === activeStudentId);
-        if (student) {
-          showDashboard(student);
-        }
-      }
-    });
-
-    setInterval(() => {
+    setInterval(async () => {
       const activeStudentId = localStorage.getItem(STUDENT_AUTH_KEY);
       if (activeStudentId && reportView.style.display !== 'none') {
-        const student = loadAccounts().find(user => user.studentId === activeStudentId);
-        if (student) {
-          renderReport(student);
+        const user = await verifySession();
+        if (user && user.role === 'student') {
+          renderReport(user);
         }
       }
     }, 3000);

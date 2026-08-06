@@ -54,23 +54,45 @@
   </div>
 
   <script>
+    const API_BASE = window.location.protocol === 'file:' ? 'http://localhost:3000' : window.location.origin;
     const AUTH_KEY = 'sentryAdminAuth';
     const SUPER_AUTH_KEY = 'sentrySuperAdminAuth';
     const TEACHER_AUTH_KEY = 'sentryTeacherAuth';
-    const PEOPLE_KEY = 'sentrySuperAdminPeople';
 
-    if (localStorage.getItem(SUPER_AUTH_KEY) !== 'true') {
-      window.location.href = 'admin-login.html';
+    async function requireAuth() {
+      const token = localStorage.getItem('sentryAuthToken');
+      if (!token) {
+        window.location.href = 'admin-login.html';
+        return;
+      }
+      try {
+        const response = await fetch(`${API_BASE}/api/auth/verify`, { headers: { Authorization: `Bearer ${token}` } });
+        const data = await response.json();
+        if (!response.ok || !data.user || data.user.role !== 'super_admin') {
+          window.location.href = 'admin-login.html';
+          return;
+        }
+        localStorage.setItem(AUTH_KEY, 'true');
+        localStorage.setItem(TEACHER_AUTH_KEY, 'false');
+        localStorage.setItem(SUPER_AUTH_KEY, 'true');
+      } catch (error) {
+        window.location.href = 'admin-login.html';
+      }
     }
 
-    if (localStorage.getItem(TEACHER_AUTH_KEY) === 'true') {
-      window.location.href = 'admin.html';
-    }
+    void requireAuth();
 
-    document.getElementById('logoutLink').addEventListener('click', () => {
+    document.getElementById('logoutLink').addEventListener('click', async () => {
+      const token = localStorage.getItem('sentryAuthToken');
+      if (token) {
+        await fetch(`${API_BASE}/api/auth/logout`, { method: 'POST', headers: { Authorization: `Bearer ${token}` } });
+      }
       localStorage.removeItem(AUTH_KEY);
       localStorage.removeItem(TEACHER_AUTH_KEY);
       localStorage.removeItem(SUPER_AUTH_KEY);
+      localStorage.removeItem('sentryAuthToken');
+      localStorage.removeItem('sentryUserRole');
+      localStorage.removeItem('sentryUserEmail');
     });
 
     const nameInput = document.getElementById('personName');
@@ -82,43 +104,40 @@
     const teacherCountEl = document.getElementById('teacherCount');
     const studentCountEl = document.getElementById('studentCount');
 
-    function loadPeople() {
+    async function loadPeople() {
+      const token = localStorage.getItem('sentryAuthToken');
+      const response = await fetch(`${API_BASE}/api/users`, { headers: { Authorization: `Bearer ${token}` } });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Unable to load users');
+      return data;
+    }
+
+    async function renderPeople() {
       try {
-        const raw = localStorage.getItem(PEOPLE_KEY);
-        if (!raw) return [];
-        return JSON.parse(raw);
-      } catch (err) {
-        return [];
-      }
-    }
+        const people = (await loadPeople()).filter(p => p.role === 'teacher' || p.role === 'student');
+        teacherCountEl.textContent = people.filter(p => p.role === 'teacher').length;
+        studentCountEl.textContent = people.filter(p => p.role === 'student').length;
 
-    function savePeople(people) {
-      localStorage.setItem(PEOPLE_KEY, JSON.stringify(people));
-    }
+        if (people.length === 0) {
+          peopleList.innerHTML = '<div class="empty">No users registered yet.</div>';
+          return;
+        }
 
-    function renderPeople() {
-      const people = loadPeople();
-      teacherCountEl.textContent = people.filter(p => p.role === 'teacher').length;
-      studentCountEl.textContent = people.filter(p => p.role === 'student').length;
-
-      if (people.length === 0) {
-        peopleList.innerHTML = '<div class="empty">No users registered yet.</div>';
-        return;
-      }
-
-      peopleList.innerHTML = people.map(person => `
-        <div class="item">
-          <div>
-            <div class="name">${escapeHtml(person.name)}</div>
-            <div class="meta">${escapeHtml(person.email)} · ${escapeHtml(person.role)}${person.role === 'student' && person.studentId ? ` · ID ${escapeHtml(person.studentId)}` : ''}</div>
+        peopleList.innerHTML = people.map(person => `
+          <div class="item">
+            <div>
+              <div class="name">${escapeHtml(person.name)}</div>
+              <div class="meta">${escapeHtml(person.email || '')} · ${escapeHtml(person.role)}${person.role === 'student' && person.studentId ? ` · ID ${escapeHtml(person.studentId)}` : ''}</div>
+            </div>
+            <div class="row-actions">
+              <div class="pill ${person.role === 'teacher' ? '' : 'warn'}">${person.role === 'teacher' ? 'Teacher' : 'Student'}</div>
+              <button class="danger" data-action="remove" data-id="${person.id}">Remove</button>
+            </div>
           </div>
-          <div class="row-actions">
-            <div class="pill ${person.role === 'teacher' ? '' : 'warn'}">${person.role === 'teacher' ? 'Teacher' : 'Student'}</div>
-            <button data-action="toggle" data-id="${person.id}">${person.status === 'active' ? 'Deactivate' : 'Activate'}</button>
-            <button class="danger" data-action="remove" data-id="${person.id}">Remove</button>
-          </div>
-        </div>
-      `).join('');
+        `).join('');
+      } catch (error) {
+        peopleList.innerHTML = `<div class="empty">${escapeHtml(error.message || 'Could not load users')}</div>`;
+      }
     }
 
     function escapeHtml(str) {
@@ -127,7 +146,7 @@
       return div.innerHTML;
     }
 
-    document.getElementById('registerBtn').addEventListener('click', () => {
+    document.getElementById('registerBtn').addEventListener('click', async () => {
       const name = nameInput.value.trim();
       const email = emailInput.value.trim();
       const role = roleSelect.value;
@@ -136,51 +155,61 @@
       if (!name || !email || !password) return;
       if (role === 'student' && !studentId) return;
 
-      const people = loadPeople();
-      people.push({
-        id: Date.now().toString(36),
-        name,
-        email,
-        role,
-        status: 'active',
-        studentId: role === 'student' ? studentId : '',
-        password
+      const token = localStorage.getItem('sentryAuthToken');
+      const response = await fetch(`${API_BASE}/api/users`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ name, email, password, role, studentId })
       });
-      savePeople(people);
+      const data = await response.json();
+      if (!response.ok) {
+        alert(data.error || 'Unable to create user');
+        return;
+      }
       nameInput.value = '';
       emailInput.value = '';
       studentIdInput.value = '';
       studentPasswordInput.value = '';
       roleSelect.value = 'teacher';
-      renderPeople();
+      await renderPeople();
     });
 
-    peopleList.addEventListener('click', (event) => {
+    peopleList.addEventListener('click', async (event) => {
       const button = event.target.closest('button[data-action]');
       if (!button) return;
-      const people = loadPeople();
       const id = button.dataset.id;
-      if (button.dataset.action === 'toggle') {
-        const person = people.find(p => p.id === id);
-        if (person) person.status = person.status === 'active' ? 'inactive' : 'active';
-      }
       if (button.dataset.action === 'remove') {
-        const filtered = people.filter(p => p.id !== id);
-        savePeople(filtered);
-        renderPeople();
-        return;
+        const token = localStorage.getItem('sentryAuthToken');
+        const response = await fetch(`${API_BASE}/api/users/${id}`, {
+          method: 'DELETE',
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        const data = await response.json();
+        if (!response.ok) {
+          alert(data.error || 'Unable to delete user');
+          return;
+        }
+        await renderPeople();
       }
-      savePeople(people);
-      renderPeople();
     });
 
-    document.getElementById('resetPeopleBtn').addEventListener('click', () => {
+    document.getElementById('resetPeopleBtn').addEventListener('click', async () => {
       if (!confirm('Reset all registered teachers and students?')) return;
-      savePeople([]);
-      renderPeople();
+      try {
+        const token = localStorage.getItem('sentryAuthToken');
+        const response = await fetch(`${API_BASE}/api/users`, { headers: { Authorization: `Bearer ${token}` } });
+        const users = await response.json();
+        const manualUsers = users.filter(user => user.role === 'teacher' || user.role === 'student');
+        for (const user of manualUsers) {
+          await fetch(`${API_BASE}/api/users/${user.id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } });
+        }
+        await renderPeople();
+      } catch (error) {
+        alert(error.message || 'Unable to reset users');
+      }
     });
 
-    renderPeople();
+    void renderPeople();
   </script>
 </body>
 </html>

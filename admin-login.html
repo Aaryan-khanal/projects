@@ -38,32 +38,13 @@
   </div>
 
   <script>
+    const API_BASE = window.location.protocol === 'file:' ? 'http://localhost:3000' : window.location.origin;
     const usernameInput = document.getElementById('username');
     const passwordInput = document.getElementById('password');
     const errorMsg = document.getElementById('errorMsg');
     const adminModeBtn = document.getElementById('adminModeBtn');
     const superAdminModeBtn = document.getElementById('superAdminModeBtn');
-    const PEOPLE_KEY = 'sentrySuperAdminPeople';
     let mode = 'admin';
-
-    function loadPeople() {
-      try {
-        const raw = localStorage.getItem(PEOPLE_KEY);
-        if (!raw) return [];
-        return JSON.parse(raw);
-      } catch (err) {
-        return [];
-      }
-    }
-
-    function findTeacherAccount(email, password) {
-      return loadPeople().find(person =>
-        person.role === 'teacher' &&
-        person.status === 'active' &&
-        String(person.email).trim().toLowerCase() === String(email).trim().toLowerCase() &&
-        String(person.password) === String(password)
-      );
-    }
 
     function setMode(nextMode) {
       mode = nextMode;
@@ -73,42 +54,49 @@
       document.querySelector('.subtitle').textContent = nextMode === 'super' ? 'Secure super access' : 'Secure access';
     }
 
+    function persistSession(token, user) {
+      localStorage.setItem('sentryAuthToken', token);
+      localStorage.setItem('sentryUserRole', user.role);
+      localStorage.setItem('sentryUserEmail', user.email || '');
+      localStorage.setItem('sentryAdminAuth', user.role === 'super_admin' || user.role === 'admin' ? 'true' : 'false');
+      localStorage.setItem('sentryTeacherAuth', user.role === 'teacher' ? 'true' : 'false');
+      localStorage.setItem('sentrySuperAdminAuth', user.role === 'super_admin' ? 'true' : 'false');
+    }
+
+    async function authenticateUser(email, password) {
+      const response = await fetch(`${API_BASE}/api/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password, role: mode === 'super' ? 'superadmin' : 'admin' })
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Login failed');
+      return data;
+    }
+
     adminModeBtn.addEventListener('click', () => setMode('admin'));
     superAdminModeBtn.addEventListener('click', () => setMode('super'));
 
-    document.getElementById('loginBtn').addEventListener('click', () => {
+    document.getElementById('loginBtn').addEventListener('click', async () => {
       const email = usernameInput.value.trim().toLowerCase();
       const password = passwordInput.value;
 
-      if (mode === 'super') {
-        if (email === 'superadmin' && password === 'superadmin') {
-          localStorage.setItem('sentryAdminAuth', 'true');
-          localStorage.setItem('sentrySuperAdminAuth', 'true');
+      if (!email || !password) {
+        errorMsg.textContent = 'Please enter your email and password.';
+        return;
+      }
+
+      try {
+        const result = await authenticateUser(email, password);
+        persistSession(result.token, result.user);
+        if (result.user.role === 'super_admin') {
           window.location.href = 'super-admin.html';
         } else {
-          errorMsg.textContent = 'Invalid super admin email or password';
+          window.location.href = 'admin.html';
         }
-        return;
+      } catch (err) {
+        errorMsg.textContent = err.message || 'Failed to sign in';
       }
-
-      if (email === 'admin' && password === 'admin') {
-        localStorage.setItem('sentryAdminAuth', 'true');
-        localStorage.removeItem('sentryTeacherAuth');
-        localStorage.removeItem('sentrySuperAdminAuth');
-        window.location.href = 'admin.html';
-        return;
-      }
-
-      const teacherAccount = findTeacherAccount(email, password);
-      if (teacherAccount) {
-        localStorage.setItem('sentryAdminAuth', 'false');
-        localStorage.setItem('sentryTeacherAuth', 'true');
-        localStorage.removeItem('sentrySuperAdminAuth');
-        window.location.href = 'admin.html';
-        return;
-      }
-
-      errorMsg.textContent = 'Invalid admin or teacher email or password';
     });
 
     document.addEventListener('keydown', (event) => {

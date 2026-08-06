@@ -31,7 +31,8 @@ body {
   background: var(--bg);
 }
 
-body.login-page {
+body.login-page,
+body.portal-page {
   min-height: 100vh;
   display: flex;
   align-items: center;
@@ -39,20 +40,20 @@ body.login-page {
   padding: 24px;
 }
 
-.login-shell {
+.login-shell,
+.portal-shell {
   width: 100%;
+  min-height: 100%;
   display: flex;
   align-items: center;
   justify-content: center;
 }
 
-body.login-page .card {
-  margin: 0;
-  width: min(92vw, 440px);
-}
-
-.student-login-card {
-  width: min(92vw, 440px);
+body.login-page .card,
+body.login-page .student-login-card,
+body.portal-page .card {
+  margin: 0 auto;
+  width: min(92vw, 560px);
 }
 
 .card {
@@ -313,20 +314,50 @@ button:hover { background: var(--accent-dark); }
   min-height: 14px;
 }
 
-.shell {
-  max-width: 1240px;
-  margin: 0 auto;
-  padding: 24px;
-}
+  .portal-page .shell {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
 
-.topbar {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 12px;
-  padding: 16px 20px;
-  border: 1px solid var(--line);
-  background: var(--panel);
+  .portal-page .card {
+    width: min(92vw, 620px);
+    padding: 28px;
+  }
+
+  .profile-card {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-bottom: 18px;
+    padding-bottom: 18px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .student-avatar {
+    width: 88px;
+    height: 88px;
+    border-radius: 18px;
+    object-fit: cover;
+    border: 2px solid var(--accent);
+    background: var(--panel-2);
+    box-shadow: 0 8px 20px rgba(37, 99, 235, 0.12);
+  }
+
+  .student-name {
+    font-family: var(--display);
+    font-size: 20px;
+    margin-bottom: 6px;
+  }
+
+  .student-id {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--text-dim);
+    letter-spacing: 1px;
+    text-transform: uppercase;
+  }
   border-radius: 4px;
 }
 

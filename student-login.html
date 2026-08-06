@@ -18,25 +18,25 @@
     </div>
   </div>
   <script>
-    const ACCOUNTS_KEY = 'sentrySuperAdminPeople';
+    const API_BASE = window.location.protocol === 'file:' ? 'http://localhost:3000' : window.location.origin;
     const STUDENT_AUTH_KEY = 'sentryStudentAuth';
-    function loadAccounts() {
-      try {
-        const raw = localStorage.getItem(ACCOUNTS_KEY);
-        if (!raw) return [];
-        return JSON.parse(raw).filter(item => item.role === 'student' && item.status === 'active');
-      } catch (err) { return []; }
-    }
-    document.getElementById('loginBtn').addEventListener('click', () => {
+    document.getElementById('loginBtn').addEventListener('click', async () => {
       const id = document.getElementById('studentIdInput').value.trim();
       const password = document.getElementById('studentPasswordInput').value;
-      const account = loadAccounts().find(item => item.studentId === id && String(item.password) === String(password));
-      if (!account) {
-        document.getElementById('hint').textContent = 'Invalid student ID or password.';
-        return;
+      try {
+        const response = await fetch(`${API_BASE}/api/auth/login`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ studentId: id, password, role: 'student' })
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || 'Login failed');
+        localStorage.setItem('sentryAuthToken', data.token);
+        localStorage.setItem(STUDENT_AUTH_KEY, id);
+        window.location.href = 'student-portal.html';
+      } catch (err) {
+        document.getElementById('hint').textContent = err.message || 'Invalid student ID or password.';
       }
-      localStorage.setItem(STUDENT_AUTH_KEY, id);
-      window.location.href = 'student-portal.html';
     });
   </script>
 </body>
